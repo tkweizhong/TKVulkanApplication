@@ -1,4 +1,4 @@
-﻿#define VK_USE_PLATFORM_WIN32_KHR
+#define VK_USE_PLATFORM_WIN32_KHR
 
 
 #define GLFW_INCLUDE_VULKAN
@@ -20,6 +20,8 @@ namespace std
 #include <xstring>
 #include "FileUtils.h"
 #include "xstringextension.hpp"
+#include <glm/glm.hpp>
+#include <array>
 
 //using namespace std;
 
@@ -41,6 +43,40 @@ namespace TKVulkanNS
 		}
 	};
 
+	struct Vertex
+	{
+		glm::vec2 pos;
+		glm::vec3 color;
+
+		static VkVertexInputBindingDescription getBindingDescription()
+		{
+			VkVertexInputBindingDescription bindingDescription = {};
+			bindingDescription.binding = 0;
+			bindingDescription.stride = sizeof(Vertex);
+			bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+			return bindingDescription;
+		}
+
+		static std::array<VkVertexInputAttributeDescription, 2> getAttributeDescriptions()
+		{
+			std::array<VkVertexInputAttributeDescription, 2> attributeDescriptions = {};
+			attributeDescriptions[0].binding = 0;
+			attributeDescriptions[0].location = 0;
+			attributeDescriptions[0].format = VK_FORMAT_R32G32_SFLOAT;
+			attributeDescriptions[0].offset = offsetof(Vertex, pos);
+			attributeDescriptions[1].binding = 0;
+			attributeDescriptions[1].location = 1;
+			attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+			attributeDescriptions[1].offset = offsetof(Vertex, color);
+			return attributeDescriptions;
+		}
+	};
+	const std::vector<Vertex> vertices = {
+		{{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+		{{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
+		{{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+	};
+	
 	struct SwapChainSupportDetails
 	{
 		VkSurfaceCapabilitiesKHR capabilities;
@@ -176,26 +212,7 @@ namespace TKVulkanNS
 		return bestMode;
 	}
 
-	/// <summary>
-	/// 交换链图像的分辨率；绝大部分情况下这个分辨率就是窗口的大小;
-	/// currentExtent的width/height 特殊值为unint32_t最大值时,允许自定义最佳交换链图形分辨率;
-	/// </summary>
-	/// <param name="capabilities"></param>
-	/// <returns></returns>
-	VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities)
-	{
-		if (capabilities.currentExtent.height != (std::numeric_limits<uint32_t>::max)() )
-		{
-			return capabilities.currentExtent;
-		}
 
-		{
-			VkExtent2D actualExtent = { WINDOW_WIDTH, WINDOW_HEIGHT };
-			actualExtent.width = max(capabilities.minImageExtent.width, min( capabilities.maxImageExtent.width, actualExtent.width ));
-			actualExtent.height = max(capabilities.minImageExtent.height, min(capabilities.maxImageExtent.height, actualExtent.height));
-			return actualExtent;
-		}
-	}
 
 #ifdef NDEBUG
 	const bool enableValidationLayers = false;
@@ -233,12 +250,27 @@ namespace TKVulkanNS
 		void createGraphicsPipeline();
 		void createFrameBuffers();
 		void createCommandPool();
+		void createVertexBuffer();
 		void createCommandBuffers();
 		void createSemaphores();
 		void drawFrame();
+		void recreateSwapChain();
+		void cleanupSwapChain();
+		VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities);
+		void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory);
+		void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
 
 		VkShaderModule createShaderModule(const std::vector<char>& code);
 		bool checkDeviceExtensionSupport(const VkPhysicalDevice& physicalDevice);
+
+		uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
+
+		static void onWindowResized(GLFWwindow* window, int width, int height)
+		{
+			if (width == 0 || height == 0) return;
+			auto app = reinterpret_cast<TKVulkanApplication*>(glfwGetWindowUserPointer(window));
+			app->recreateSwapChain();
+		}
 
 	private:
 		GLFWwindow* window;
@@ -257,7 +289,7 @@ namespace TKVulkanNS
 		VkExtent2D swapChainExtent;
 
 		VkPipelineLayout pipelineLayout;
-		std::vector<VkFramebuffer> swapChainFrambuffers;
+		std::vector<VkFramebuffer> swapChainFramebuffers;
 
 		VkPipeline graphicsPipeline;
 		VkRenderPass renderPass;
@@ -266,6 +298,10 @@ namespace TKVulkanNS
 
 		VkSemaphore imageAvailableSemaphore;
 		VkSemaphore renderFinishedSemaphore;
+
+		VkBuffer vertexBuffer;
+		VkMemoryRequirements memRequirements;
+		VkDeviceMemory vertexBufferMemory;
 	};
 
 	TKVulkanApplication::TKVulkanApplication() = default;
@@ -280,6 +316,7 @@ namespace TKVulkanNS
 		cleanup();
 	}
 
+
 	void TKVulkanApplication::initWindow()
 	{
 		glfwInit();
@@ -288,6 +325,32 @@ namespace TKVulkanNS
 		glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
 		window = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "TK Vulkan Application", nullptr, nullptr);
+
+		glfwSetWindowUserPointer(window, this);
+		glfwSetWindowSizeCallback(window, TKVulkanApplication::onWindowResized);
+	}
+
+	/// <summary>
+	/// 交换链图像的分辨率；绝大部分情况下这个分辨率就是窗口的大小;
+	/// currentExtent的width/height 特殊值为unint32_t最大值时,允许自定义最佳交换链图形分辨率;
+	/// </summary>
+	/// <param name="capabilities"></param>
+	/// <returns></returns>
+	VkExtent2D TKVulkanApplication::chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities)
+	{
+		if (capabilities.currentExtent.height != (std::numeric_limits<uint32_t>::max)())
+		{
+			return capabilities.currentExtent;
+		}
+
+		{
+			int width, height;
+			glfwGetFramebufferSize(window, &width, &height);
+			VkExtent2D actualExtent = { width, height };
+			actualExtent.width = std::max(capabilities.minImageExtent.width, std::min(capabilities.maxImageExtent.width, actualExtent.width));
+			actualExtent.height = std::max(capabilities.minImageExtent.height, std::min(capabilities.maxImageExtent.height, actualExtent.height));
+			return actualExtent;
+		}
 	}
 
 	void PrintExtensions()
@@ -377,7 +440,7 @@ namespace TKVulkanNS
 			throw std::runtime_error("validation layers request,but not available");
 		}
 
-		PrintExtensions();
+		//PrintExtensions();
 		auto ilegal = CheckAllRequiredExtensionPropertiesLegal();
 		if (!ilegal)
 		{
@@ -392,7 +455,7 @@ namespace TKVulkanNS
 		vkApplicationInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 1);
 		vkApplicationInfo.pEngineName = "TK Engine";
 		vkApplicationInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-		vkApplicationInfo.apiVersion = VK_MAKE_VERSION(0, 1, 0);
+		vkApplicationInfo.apiVersion = VK_API_VERSION_1_0;
 		
 		uint32_t glfwExtensionCount = 0;
 		const char** glfwExtensions;
@@ -468,6 +531,7 @@ namespace TKVulkanNS
 		createGraphicsPipeline();
 		createFrameBuffers();
 		createCommandPool();
+		createVertexBuffer();
 		createCommandBuffers();
 	}
 
@@ -857,12 +921,14 @@ namespace TKVulkanNS
 		/// <summary>
 		/// Vertex input state
 		/// </summary>
+		auto bindingDescription = Vertex::getBindingDescription();
+		auto attributeDescriptions = Vertex::getAttributeDescriptions();
 		VkPipelineVertexInputStateCreateInfo vertexInputStageCreateInfo = {};
 		vertexInputStageCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-		vertexInputStageCreateInfo.vertexBindingDescriptionCount = 0;
-		vertexInputStageCreateInfo.pVertexBindingDescriptions = nullptr;
-		vertexInputStageCreateInfo.vertexAttributeDescriptionCount = 0;
-		vertexInputStageCreateInfo.pVertexAttributeDescriptions = nullptr;
+		vertexInputStageCreateInfo.vertexBindingDescriptionCount = 1;
+		vertexInputStageCreateInfo.pVertexBindingDescriptions = &bindingDescription;
+		vertexInputStageCreateInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
+		vertexInputStageCreateInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
 		/// <summary>
 		/// Assembly State
@@ -1005,7 +1071,7 @@ namespace TKVulkanNS
 
 	void TKVulkanApplication::createFrameBuffers()
 	{
-		swapChainFrambuffers.resize( swapChainImageViews.size() );
+		swapChainFramebuffers.resize( swapChainImageViews.size() );
 		for (size_t i = 0; i < swapChainImageViews.size(); ++i)
 		{
 			VkImageView attachments[] = {
@@ -1020,8 +1086,8 @@ namespace TKVulkanNS
 			frambufferCreateIfo.width = swapChainExtent.width;
 			frambufferCreateIfo.height = swapChainExtent.height;
 			frambufferCreateIfo.layers = 1;
-			
-			if (vkCreateFramebuffer(device, &frambufferCreateIfo, nullptr, &swapChainFrambuffers[i]) != VK_SUCCESS)
+
+			if (vkCreateFramebuffer(device, &frambufferCreateIfo, nullptr, &swapChainFramebuffers[i]) != VK_SUCCESS)
 			{
 				throw std::runtime_error("failed to create framebuffer");
 			}
@@ -1048,9 +1114,93 @@ namespace TKVulkanNS
 		}
 	}
 
+	void TKVulkanApplication::copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size)
+	{
+		VkCommandBufferAllocateInfo allocateInfo = {};
+		allocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+		allocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+		allocateInfo.commandPool = commandPool;
+		allocateInfo.commandBufferCount = 1;
+		VkCommandBuffer commandBuffer;
+		vkAllocateCommandBuffers(device, &allocateInfo, &commandBuffer);
+
+		VkCommandBufferBeginInfo beginInfo = {};
+		beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+		beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+		vkBeginCommandBuffer(commandBuffer, &beginInfo);
+
+		VkBufferCopy copyRegion = {};
+		copyRegion.size = size;
+		copyRegion.srcOffset = 0;
+		copyRegion.srcOffset = 0;
+		vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
+
+		vkEndCommandBuffer(commandBuffer);
+
+		VkSubmitInfo submitInfo = {};
+		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+		submitInfo.commandBufferCount = 1;
+		submitInfo.pCommandBuffers = &commandBuffer;
+		vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+		vkQueueWaitIdle(graphicsQueue);
+
+		vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+	}
+
+	void TKVulkanApplication::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory)
+	{
+		VkBufferCreateInfo bufferCreateInfo = {};
+		bufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+		bufferCreateInfo.size = size;
+		bufferCreateInfo.usage = usage;
+		bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+		if (vkCreateBuffer(device, &bufferCreateInfo, nullptr, &buffer) != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to create buffer");
+		}
+
+		VkMemoryRequirements memoryRequirements;
+		vkGetBufferMemoryRequirements(device, buffer, &memoryRequirements);
+
+		VkMemoryAllocateInfo allocateInfo = {};
+		allocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+		allocateInfo.allocationSize = memoryRequirements.size;
+		allocateInfo.memoryTypeIndex = findMemoryType(memoryRequirements.memoryTypeBits, properties);
+
+		///实际生产环境，不要使用vkAllocateMemory为每一个CommandBuffer分配内存，这样才效率太低；定制一个内存分配器，采用内存分配器分配一个大块内存，使用offset偏移索引，并复用；
+		///第二个原因是内存分配受到maxMemoryAllocationCount物理设备所限，GTX1080也只能分配4096的大小;
+		if (vkAllocateMemory(device, &allocateInfo, nullptr, &bufferMemory) != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to allocate buffer memory");
+		}
+
+		vkBindBufferMemory(device, buffer, bufferMemory, 0);
+	}
+
+	void TKVulkanApplication::createVertexBuffer()
+	{
+		VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
+		VkBuffer stagingBuffer;
+		VkDeviceMemory stagingBufferMemory;
+		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
+
+		//填充顶点缓存区
+		void* data;
+		vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
+		memcpy(data, vertices.data(), (size_t)bufferSize);
+		vkUnmapMemory(device, stagingBufferMemory);
+
+		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, vertexBuffer, vertexBufferMemory);
+
+		copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
+		vkDestroyBuffer(device, stagingBuffer, nullptr);
+		vkFreeMemory(device, stagingBufferMemory, nullptr);
+	}
+
 	void TKVulkanApplication::createCommandBuffers()
 	{
-		commandBuffers.resize(swapChainFrambuffers.size());
+		commandBuffers.resize(swapChainFramebuffers.size());
 
 		VkCommandBufferAllocateInfo commandBufferAllocateInfo = {};
 		commandBufferAllocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -1087,7 +1237,7 @@ namespace TKVulkanNS
 			VkRenderPassBeginInfo renderPassBeginInfo = {};
 			renderPassBeginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
 			renderPassBeginInfo.renderPass = renderPass;
-			renderPassBeginInfo.framebuffer = swapChainFrambuffers[i];
+			renderPassBeginInfo.framebuffer = swapChainFramebuffers[i];
 			renderPassBeginInfo.renderArea.extent = swapChainExtent;
 			renderPassBeginInfo.renderArea.offset = { 0, 0 };
 			renderPassBeginInfo.clearValueCount = 1;
@@ -1100,7 +1250,11 @@ namespace TKVulkanNS
 			/// </summary>
 			vkCmdBeginRenderPass(commandBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 			vkCmdBindPipeline(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
-			vkCmdDraw(commandBuffers[i], 3, 1, 0, 0);
+
+			VkBuffer vertexBuffers[] = { vertexBuffer };
+			VkDeviceSize offsets[] = { 0 };
+			vkCmdBindVertexBuffers(commandBuffers[i], 0, 1, vertexBuffers, offsets);
+			vkCmdDraw(commandBuffers[i], static_cast<uint32_t>(vertices.size()), 1, 0, 0);
 			vkCmdEndRenderPass(commandBuffers[i]);
 			if (vkEndCommandBuffer(commandBuffers[i]) != VK_SUCCESS) {
 				throw std::runtime_error("failed to record command buffer!");
@@ -1137,8 +1291,19 @@ namespace TKVulkanNS
 		/// 从交换链换取图像;
 		/// </summary>
 		uint32_t imageIndex;
-		vkAcquireNextImageKHR(device, swapChain, (std::numeric_limits<uint64_t>::max)(), imageAvailableSemaphore,
+		VkResult result = vkAcquireNextImageKHR(device, swapChain, (std::numeric_limits<uint64_t>::max)(), imageAvailableSemaphore,
 			VK_NULL_HANDLE, &imageIndex);
+		//交换链与surface 不再兼容，不可进行渲染.
+		if (result == VK_ERROR_OUT_OF_DATE_KHR)
+		{
+			recreateSwapChain();
+			return;
+		}
+		//交换链仍然可以向surface提交图像，但是surface的属性不再匹配正确。比如平台可能重新调整图像的尺寸适应窗体大小;
+		else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
+		{
+			throw std::runtime_error("failed to acquire swap chain image");
+		}
 
 		/// <summary>
 		/// 提交命令缓冲区;
@@ -1175,7 +1340,70 @@ namespace TKVulkanNS
 		presentInfo.pImageIndices = &imageIndex;
 		presentInfo.pResults = nullptr;
 
-		vkQueuePresentKHR(presentQueue, &presentInfo);
+		result = vkQueuePresentKHR(presentQueue, &presentInfo);
+		//如果是非最佳状态，也重新创建交换链。确保效果没有任何差错，尝试调整窗体大小，帧缓冲区大小变化与窗体匹配.
+		if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
+		{
+			recreateSwapChain();
+		}
+		else if (result != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to present swap chain image");
+		}
+		vkQueueWaitIdle(presentQueue);
+	}
+
+	void TKVulkanApplication::recreateSwapChain()
+	{
+		vkDeviceWaitIdle(device);
+
+		createSwapChain();
+		createImageViews();
+		createRenderPass();
+		createGraphicsPipeline();
+		createFrameBuffers();
+		createCommandBuffers();
+	}
+
+	void TKVulkanApplication::cleanupSwapChain()
+	{
+		for (size_t i = 0; i < swapChainFramebuffers.size(); i++)
+		{
+			vkDestroyFramebuffer(device, swapChainFramebuffers[i], nullptr);
+		}
+
+		vkFreeCommandBuffers(device, commandPool, static_cast<uint32_t>(commandBuffers.size()), commandBuffers.data());
+
+		vkDestroyPipeline(device, graphicsPipeline, nullptr);
+		vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+		vkDestroyRenderPass(device, renderPass, nullptr);
+		for (size_t i = 0; i<swapChainImageViews.size(); ++i)
+		{
+			vkDestroyImageView(device, swapChainImageViews[i], nullptr);
+		}
+		vkDestroySwapchainKHR(device, swapChain, nullptr);
+	}
+
+	/// <summary>
+	/// 
+	/// </summary>
+	/// <param name="typeFilter"></param>
+	/// <param name="properties"></param>
+	/// <returns></returns>
+	uint32_t TKVulkanApplication::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties)
+	{
+		VkPhysicalDeviceMemoryProperties memProperties;
+		vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
+		for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++)
+		{
+			if ((typeFilter & (1 << i)) 
+				&& (memProperties.memoryTypes[i].propertyFlags & properties) == properties
+				)
+			{
+				return i;
+			}
+		}
+		throw std::runtime_error("failed to find suitable memory type!");
 	}
 
 	void TKVulkanApplication::mainLoop()
@@ -1183,9 +1411,7 @@ namespace TKVulkanNS
 		while (!glfwWindowShouldClose(window))
 		{
 			glfwPollEvents();
-
-
-
+			
 			drawFrame();
 		}
 
@@ -1197,18 +1423,22 @@ namespace TKVulkanNS
 
 	void TKVulkanApplication::cleanup()
 	{
+		cleanupSwapChain();
+		vkDestroyBuffer(device, vertexBuffer, nullptr);
+		vkFreeMemory(device, vertexBufferMemory, nullptr);
 		if (enableValidationLayers)
 			DestroyDebugReportCallbackEXT(vkInstance, callback, nullptr);
 
 		vkDestroySemaphore(device, imageAvailableSemaphore, nullptr);
 		vkDestroySemaphore(device, renderFinishedSemaphore, nullptr);
+
 		vkDestroyCommandPool(device, commandPool, nullptr);
 		vkDestroyPipeline(device, graphicsPipeline, nullptr);
 		vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
 		vkDestroyRenderPass(device, renderPass, nullptr);
 		for (size_t i = 0; i < swapChainImageViews.size(); ++i)
 		{
-			vkDestroyFramebuffer(device, swapChainFrambuffers[i], nullptr);
+			vkDestroyFramebuffer(device, swapChainFramebuffers[i], nullptr);
 		}
 		vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
 		for (size_t i = 0; i < swapChainImageViews.size(); ++i)
