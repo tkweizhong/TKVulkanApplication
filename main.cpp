@@ -16,23 +16,31 @@ namespace std
 #include <vector>
 #include <optional>
 #include <map>
+#include <unordered_map>
 #include <set>
 #include <xstring>
 #include "FileUtils.h"
 #include "xstringextension.hpp"
 #include <array>
 
-#define GLM_FORCE_RADIANS
+#define GLM_FORCE_RADIANS // 使用弧度制
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE // 使用Vulkan的深度范围是[0, 1]
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtx/hash.hpp>
 #include <chrono>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
+
+#define TINYOBJLOADER_IMPLEMENTATION
+#include <tiny_obj_loader.h>
 //using namespace std;
 
-namespace TKVulkanNS
+namespace std
 {
+
+
 	/// <summary>
 	/// 并不是每一个物理设备都支持窗体显示功能，我们需要检查物理设备是否可以图像呈现到我们创建的surface上;
 	/// 支持graphics命令的队列簇 和  支持presentation命令的队列簇可能不是一个队列簇，因此这里需要分开两个字段来查询;
@@ -51,8 +59,14 @@ namespace TKVulkanNS
 
 	struct Vertex
 	{
-		glm::vec2 pos;
+		glm::vec3 pos;
 		glm::vec3 color;
+		glm::vec2 texCoord;
+
+		bool operator==(const Vertex& other) const
+		{
+			return pos == other.pos && color == other.color && texCoord == other.texCoord;
+		}
 
 		static VkVertexInputBindingDescription getBindingDescription()
 		{
@@ -63,30 +77,33 @@ namespace TKVulkanNS
 			return bindingDescription;
 		}
 
-		static std::array<VkVertexInputAttributeDescription, 2> getAttributeDescriptions()
+		static std::array<VkVertexInputAttributeDescription, 3> getAttributeDescriptions()
 		{
-			std::array<VkVertexInputAttributeDescription, 2> attributeDescriptions = {};
+			std::array<VkVertexInputAttributeDescription, 3> attributeDescriptions = {};
 			attributeDescriptions[0].binding = 0;
 			attributeDescriptions[0].location = 0;
-			attributeDescriptions[0].format = VK_FORMAT_R32G32_SFLOAT;
+			attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
 			attributeDescriptions[0].offset = offsetof(Vertex, pos);
+
 			attributeDescriptions[1].binding = 0;
 			attributeDescriptions[1].location = 1;
 			attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
 			attributeDescriptions[1].offset = offsetof(Vertex, color);
+
+			attributeDescriptions[2].binding = 0;
+			attributeDescriptions[2].location = 2;
+			attributeDescriptions[2].format = VK_FORMAT_R32G32_SFLOAT;
+			attributeDescriptions[2].offset = offsetof(Vertex, texCoord);
 			return attributeDescriptions;
 		}
 	};
-	
-	const std::vector<Vertex> vertices = {
-		{{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-		{{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-		{{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
-	};
 
-	const std::vector<uint16_t> indices = {
-		0,1,2,
-		2,3,0
+	template<> struct hash<Vertex> {
+		size_t operator()(Vertex const& vertex) const {
+			return ((hash<glm::vec3>()(vertex.pos) ^
+				(hash<glm::vec3>()(vertex.color) << 1)) >> 1) ^
+				(hash<glm::vec2>()(vertex.texCoord) << 1);
+		}
 	};
 
 	struct UniformBufferObject
@@ -105,6 +122,10 @@ namespace TKVulkanNS
 
 	const uint32_t WINDOW_WIDTH = 800;
 	const uint32_t WINDOW_HEIGHT = 600;
+	#define MAX_FRAMES_IN_SWAP_CHAIN (swapChainImageCount)
+
+	const std::string MODEL_PATH = "models/viking_room.obj";
+	const std::string TEXTURE_PATH = "textures/viking_room.png";
 
 	const std::vector<const char*> validationLayers = {
 		"VK_LAYER_KHRONOS_validation",
@@ -264,6 +285,7 @@ namespace TKVulkanNS
 
 		void createLogicalDevice();
 		void createSwapChain();
+		VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags, uint32_t mipLevels);
 		void createImageViews();
 		void createRenderPass();
 		void createDescriptorPool();
@@ -272,15 +294,22 @@ namespace TKVulkanNS
 		void createGraphicsPipeline();
 		void createFrameBuffers();
 		void createCommandPool();
+
+		void createImage(uint32_t width, uint32_t height, uint32_t mipLevels, VkSampleCountFlagBits numSamples, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage,
+			VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory);
 		void createTextureImage();
 		void createTextureImageView();
-		void createImageView();
+		void createTextureSampler();
+		void createDepthResources();
+
+		void loadModel();
 		void createVertexBuffer();
 		void createIndexBuffer();
 		void createUniformBuffer();
 		void updateUniformBuffer();
+
 		void createCommandBuffers();
-		void createSemaphores();
+
 		void drawFrame();
 		void recreateSwapChain();
 		void cleanupSwapChain();
@@ -288,7 +317,7 @@ namespace TKVulkanNS
 		void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory);
 		void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
 		void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height);
-		void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout);
+		void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout, uint32_t mipLevels);
 		bool hasStencilComponent(VkFormat format);
 
 		VkCommandBuffer beginSingleTimeCommands();
@@ -298,6 +327,21 @@ namespace TKVulkanNS
 		bool checkDeviceExtensionSupport(const VkPhysicalDevice& physicalDevice);
 
 		uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
+		VkFormat findSupportedFormat(const std::vector<VkFormat>& cadidates, VkImageTiling tiling, VkFormatFeatureFlags features);
+		VkFormat findDepthFormat();
+
+		void generateMipmaps(VkImage iamge, VkFormat format, int32_t texWidth, int32_t texHeight, uint32_t mipLevels);
+
+		void createColorResources()
+		{
+			VkFormat colorFormat = swapChainImageFormat.format;
+			createImage(swapChainExtent.width, swapChainExtent.height, 1, msaaSamples, colorFormat, VK_IMAGE_TILING_OPTIMAL, 
+				VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, colorImage, colorImageMemory);
+			colorImageView = createImageView(colorImage, colorFormat, VK_IMAGE_ASPECT_COLOR_BIT, 1);
+
+			transitionImageLayout(colorImage, colorFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 1);
+		}
 
 		static void onWindowResized(GLFWwindow* window, int width, int height)
 		{
@@ -305,6 +349,33 @@ namespace TKVulkanNS
 			auto app = reinterpret_cast<TKVulkanApplication*>(glfwGetWindowUserPointer(window));
 			app->recreateSwapChain();
 		}
+
+		void createSyncObjects()
+		{
+			imageAvailableSemaphore.resize(MAX_FRAMES_IN_SWAP_CHAIN);
+			renderFinishedSemaphore.resize(MAX_FRAMES_IN_SWAP_CHAIN);
+			inFlightFences.resize(MAX_FRAMES_IN_SWAP_CHAIN);
+
+			for (int i = 0; i < MAX_FRAMES_IN_SWAP_CHAIN; ++i)
+			{
+				VkSemaphoreCreateInfo semaphoreInfo = {};
+				semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+				VkFenceCreateInfo fenceInfo = {};
+				fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+				fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+
+				if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageAvailableSemaphore[i]) != VK_SUCCESS ||
+					vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphore[i]) != VK_SUCCESS ||
+					vkCreateFence(device, &fenceInfo, nullptr, &inFlightFences[i]) != VK_SUCCESS)
+				{
+					throw std::runtime_error("create sync object failed!");
+				}
+			}  
+		}
+
+		void recordCommandBuffers(VkCommandBuffer commandBuffer, uint32_t imageIndex);
+
+		VkSampleCountFlagBits getMaxUsableSampleCount();
 
 	private:
 		GLFWwindow* window;
@@ -330,8 +401,9 @@ namespace TKVulkanNS
 		VkCommandPool commandPool;
 		std::vector<VkCommandBuffer> commandBuffers;
 
-		VkSemaphore imageAvailableSemaphore;
-		VkSemaphore renderFinishedSemaphore;
+		std::vector<VkSemaphore> imageAvailableSemaphore;
+		std::vector<VkSemaphore> renderFinishedSemaphore;
+		std::vector<VkFence> inFlightFences;
 
 		//VBO
 		VkBuffer vertexBuffer;
@@ -349,12 +421,33 @@ namespace TKVulkanNS
 		VkDeviceMemory uniformBufferMemory;
 
 		VkDescriptorPool descriptorPool;
-		VkDescriptorSet descriptorSet;
+		std::vector<VkDescriptorSet> descriptorSets;
 
-		//image
+		//Color Target buffer
+		uint32_t mipLevels;
 		VkImage textureImage;
 		VkDeviceMemory textureImageMemory;
 		VkImageView textureImageView;
+
+		VkSampler textureSampler;
+		
+		//Depth-Stencil Target buffer
+		VkImage depthImage;
+		VkDeviceMemory depthImageMemory;
+		VkImageView depthImageView;
+
+		std::vector<Vertex> vertices;
+		std::vector<uint32_t> indices;
+
+		//MSAA
+		VkSampleCountFlagBits msaaSamples;
+		//MSAA 需要额外一个缓冲区用来处理
+		VkImage colorImage;
+		VkDeviceMemory colorImageMemory;
+		VkImageView colorImageView;
+
+		uint16_t currentFrame = 0;
+		uint16_t swapChainImageCount;
 	};
 
 	TKVulkanApplication::TKVulkanApplication() = default;
@@ -583,15 +676,28 @@ namespace TKVulkanNS
 		createRenderPass();
 		createDescriptorSetLayout();
 		createGraphicsPipeline();
-		createFrameBuffers();
+		
 		createCommandPool();
+
+		createColorResources();
+		createDepthResources();
+		createFrameBuffers();
+		
+
 		createTextureImage();
+		createTextureImageView();
+		createTextureSampler();
+
+		loadModel();
 		createVertexBuffer();
 		createIndexBuffer();
 		createUniformBuffer();
+		
 		createDescriptorPool();
 		createDescriptorSets();
+		
 		createCommandBuffers();
+		createSyncObjects();
 	}
 
 	void TKVulkanApplication::createLogicalDevice()
@@ -613,6 +719,8 @@ namespace TKVulkanNS
 		}
 
 		VkPhysicalDeviceFeatures deviceFeatures = {};
+		deviceFeatures.samplerAnisotropy = VK_TRUE;
+		deviceFeatures.sampleRateShading = VK_TRUE;
 
 		VkDeviceCreateInfo deviceCreateInfo = {};
 		deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -697,7 +805,11 @@ namespace TKVulkanNS
 			SwapChainSupportDetails swapChainSupport = querySwapChainSupport(device);
 			swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
 		}
-		return indices.isComplete() && extensionsSupported && swapChainAdequate;
+
+		VkPhysicalDeviceFeatures supportedFeatures;
+		vkGetPhysicalDeviceFeatures(physicalDevice, &supportedFeatures);
+
+		return indices.isComplete() && extensionsSupported && swapChainAdequate && supportedFeatures.samplerAnisotropy;
 	}
 
 	int TKVulkanApplication::rateDeviceSuitableility(const VkPhysicalDevice& device)
@@ -738,8 +850,8 @@ namespace TKVulkanNS
 		if (itor!= cadidates.crend() && (*itor).first > 0)
 		{
 			physicalDevice = (*itor).second;
+			msaaSamples = getMaxUsableSampleCount();
 		}
-		
 
 		if (physicalDevice == VK_NULL_HANDLE)
 		{
@@ -810,6 +922,7 @@ namespace TKVulkanNS
 		{
 			imageCount = imageMaxCount;
 		}
+		swapChainImageCount = imageCount;
 
 		VkSwapchainCreateInfoKHR swapChainCreateInfo = {};
 		swapChainCreateInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
@@ -857,42 +970,48 @@ namespace TKVulkanNS
 		swapChainExtent = extent;
 	}
 
+	VkImageView TKVulkanApplication::createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags, uint32_t mipLevels)
+	{
+		VkImageViewCreateInfo imageViewCreateInfo = {};
+		imageViewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+		imageViewCreateInfo.image = image;
+		imageViewCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+		imageViewCreateInfo.format = format;
+		/// <summary>
+		/// 指定View访问到的Image的通道映射，默认采用VK_COMPONENT_SWIZZLE_IDENTITY即可;
+		/// VK_COMPONENT_SWIZZLE_IDENTITY 相当于imageViewCreateInfo.components.r/g/b/a = VK_COMPONENT_SWIZZLE_R/G/B/A;
+		/// </summary>
+		imageViewCreateInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+		imageViewCreateInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+		imageViewCreateInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+		imageViewCreateInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+		imageViewCreateInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+		/// <summary>
+		/// aspectMask:指明view访问的是哪种类型的image
+		/// baseArrayLayer/baseMipLevel: view能访问的image的起始ArrayLayer/Mipmap Level
+		/// layerCount/levelCount: view能访问的ArrayLayer/mipmap数量，如果是从baseArrayLayer/baseMipLevel后所有的levels，
+		/// 可以使用VK_REMAINING_ARRAY_LAYERS/VK_REMAINING_MIP_LEVELS 来处理
+		/// </summary>
+		imageViewCreateInfo.subresourceRange.aspectMask = aspectFlags;
+		imageViewCreateInfo.subresourceRange.baseArrayLayer = 0;
+		imageViewCreateInfo.subresourceRange.baseMipLevel = 0;
+		imageViewCreateInfo.subresourceRange.layerCount = 1;
+		imageViewCreateInfo.subresourceRange.levelCount = mipLevels;
+		
+		VkImageView imageView;
+		if (vkCreateImageView(device, &imageViewCreateInfo, nullptr, &imageView) != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to create image views");
+		}
+		return imageView;
+	}
 
 	void TKVulkanApplication::createImageViews()
 	{
 		swapChainImageViews.resize(swapChainImages.size());
 		for (size_t i = 0; i < swapChainImages.size(); ++i)
 		{
-			VkImageViewCreateInfo imageViewCreateInfo = {};
-			imageViewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-			imageViewCreateInfo.image = swapChainImages[i];
-			imageViewCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-			imageViewCreateInfo.format = swapChainImageFormat.format;
-			/// <summary>
-			/// 指定View访问到的Image的通道映射，默认采用VK_COMPONENT_SWIZZLE_IDENTITY即可;
-			/// VK_COMPONENT_SWIZZLE_IDENTITY 相当于imageViewCreateInfo.components.r/g/b/a = VK_COMPONENT_SWIZZLE_R/G/B/A;
-			/// </summary>
-			imageViewCreateInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-			imageViewCreateInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-			imageViewCreateInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-			imageViewCreateInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-
-			/// <summary>
-			/// aspectMask:指明view访问的是哪种类型的image
-			/// baseArrayLayer/baseMipLevel: view能访问的image的起始ArrayLayer/Mipmap Level
-			/// layerCount/levelCount: view能访问的ArrayLayer/mipmap数量，如果是从baseArrayLayer/baseMipLevel后所有的levels，
-			/// 可以使用VK_REMAINING_ARRAY_LAYERS/VK_REMAINING_MIP_LEVELS 来处理
-			/// </summary>
-			imageViewCreateInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-			imageViewCreateInfo.subresourceRange.baseArrayLayer = 0;
-			imageViewCreateInfo.subresourceRange.baseMipLevel = 0;
-			imageViewCreateInfo.subresourceRange.layerCount = 1;
-			imageViewCreateInfo.subresourceRange.levelCount = 1;
-
-			if (vkCreateImageView(device, &imageViewCreateInfo, nullptr, &swapChainImageViews[i]) != VK_SUCCESS)
-			{
-				throw std::runtime_error("failed to create image views");
-			}
+			swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat.format, VK_IMAGE_ASPECT_COLOR_BIT, 1);
 		}
 	}
 
@@ -900,7 +1019,7 @@ namespace TKVulkanNS
 	{
 		VkAttachmentDescription colorAttachment = {};
 		colorAttachment.format = swapChainImageFormat.format;
-		colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+		colorAttachment.samples = msaaSamples;
 		colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
 		colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 		colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -913,7 +1032,29 @@ namespace TKVulkanNS
 		/// VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL 图像作为目标，用于内存COPY操作
 		/// </summary>
 		colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+		colorAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+		VkAttachmentDescription depthAttachment = {};
+		depthAttachment.format = findDepthFormat();
+		depthAttachment.samples = msaaSamples;
+		depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+		depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+		//MSAA
+		VkAttachmentDescription colorAttachmentResolve = {};
+		colorAttachmentResolve.format = swapChainImageFormat.format;
+		colorAttachmentResolve.samples = VK_SAMPLE_COUNT_1_BIT;
+		colorAttachmentResolve.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		colorAttachmentResolve.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+		colorAttachmentResolve.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		colorAttachmentResolve.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		colorAttachmentResolve.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		colorAttachmentResolve.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
 
 		//sub pass
 		VkAttachmentReference colorAttachmentRef = {};
@@ -921,15 +1062,26 @@ namespace TKVulkanNS
 		//colorAttachmentRef.layout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL;
 		colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
+		VkAttachmentReference depthAttachmentRef = {};
+		depthAttachmentRef.attachment = 1;
+		depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+		VkAttachmentReference colorAttachmentResolveRef = {};
+		colorAttachmentResolveRef.attachment = 2;
+		colorAttachmentResolveRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
 		VkSubpassDescription subpassDes = {};
 		subpassDes.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
 		subpassDes.colorAttachmentCount = 1;
 		subpassDes.pColorAttachments = &colorAttachmentRef;
+		subpassDes.pDepthStencilAttachment = &depthAttachmentRef;
+		subpassDes.pResolveAttachments = &colorAttachmentResolveRef;
 
+		std::array<VkAttachmentDescription, 3> attachments = { colorAttachment, depthAttachment, colorAttachmentResolve };
 		VkRenderPassCreateInfo renderPassCreateInfo = {};
 		renderPassCreateInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-		renderPassCreateInfo.attachmentCount = 1;
-		renderPassCreateInfo.pAttachments = &colorAttachment;
+		renderPassCreateInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+		renderPassCreateInfo.pAttachments = attachments.data();
 		renderPassCreateInfo.subpassCount = 1;
 		renderPassCreateInfo.pSubpasses = &subpassDes;
 
@@ -958,45 +1110,66 @@ namespace TKVulkanNS
 		VkDescriptorSetAllocateInfo allocInfo = {};
 		allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
 		allocInfo.descriptorPool = descriptorPool;
-		allocInfo.descriptorSetCount = 1;
-		VkDescriptorSetLayout layouts[] = { descriptorSetLayout };
-		allocInfo.pSetLayouts = layouts;
+		allocInfo.descriptorSetCount = MAX_FRAMES_IN_SWAP_CHAIN;
+		std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_SWAP_CHAIN, descriptorSetLayout);
+		allocInfo.pSetLayouts = layouts.data();
 
-		if (vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet) != VK_SUCCESS)
+		descriptorSets.resize(MAX_FRAMES_IN_SWAP_CHAIN);
+		if (vkAllocateDescriptorSets(device, &allocInfo, descriptorSets.data()) != VK_SUCCESS)
 		{
 			throw std::runtime_error("failed to allocate descriptor set");
 		}
 
-		VkDescriptorBufferInfo bufferInfo = {};
-		bufferInfo.buffer = uniformBuffer;
-		bufferInfo.offset = 0;
-		bufferInfo.range = sizeof(UniformBufferObject);
+		for (size_t i = 0; i < MAX_FRAMES_IN_SWAP_CHAIN; ++i)
+		{
+			VkDescriptorBufferInfo bufferInfo = {};
+			bufferInfo.buffer = uniformBuffer;
+			bufferInfo.offset = 0;
+			bufferInfo.range = sizeof(UniformBufferObject);
 
-		VkWriteDescriptorSet descriptorWrite = {};
-		descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-		descriptorWrite.dstSet = descriptorSet;
-		descriptorWrite.dstBinding = 0;
-		descriptorWrite.dstArrayElement = 0;
-		descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-		descriptorWrite.descriptorCount = 1;
-		descriptorWrite.pBufferInfo = &bufferInfo;
-		descriptorWrite.pImageInfo = nullptr;
-		descriptorWrite.pTexelBufferView = nullptr;
+			std::array<VkWriteDescriptorSet, 2> descriptorWrites = {};
+			descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			descriptorWrites[0].dstSet = descriptorSets[i];
+			descriptorWrites[0].dstBinding = 0;
+			descriptorWrites[0].dstArrayElement = 0;
+			descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+			descriptorWrites[0].descriptorCount = 1;
+			descriptorWrites[0].pBufferInfo = &bufferInfo;
+			descriptorWrites[0].pImageInfo = nullptr;
+			descriptorWrites[0].pTexelBufferView = nullptr;
 
-		vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
+			VkDescriptorImageInfo imageInfo = {};
+			imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			imageInfo.imageView = textureImageView;
+			imageInfo.sampler = textureSampler;
+
+			descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			descriptorWrites[1].dstSet = descriptorSets[i];
+			descriptorWrites[1].dstBinding = 1;
+			descriptorWrites[1].dstArrayElement = 0;
+			descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			descriptorWrites[1].descriptorCount = 1;
+			descriptorWrites[1].pBufferInfo = nullptr;
+			descriptorWrites[1].pImageInfo = &imageInfo;
+			descriptorWrites[1].pTexelBufferView = nullptr;
+
+			vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
+		}
 	}
 
 	void TKVulkanApplication::createDescriptorPool()
 	{
-		VkDescriptorPoolSize poolSize = {};
-		poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-		poolSize.descriptorCount = 1;
+		std::array<VkDescriptorPoolSize, 2> poolSizes = {};
+		poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_SWAP_CHAIN);
+		poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_SWAP_CHAIN);
 
 		VkDescriptorPoolCreateInfo poolCreateInfo = {};
 		poolCreateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-		poolCreateInfo.poolSizeCount = 1;
-		poolCreateInfo.pPoolSizes = &poolSize;
-		poolCreateInfo.maxSets = 1;
+		poolCreateInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+		poolCreateInfo.pPoolSizes = poolSizes.data();
+		poolCreateInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_SWAP_CHAIN);
 
 		if (vkCreateDescriptorPool(device, &poolCreateInfo, nullptr, &descriptorPool) != VK_SUCCESS)
 		{
@@ -1013,10 +1186,18 @@ namespace TKVulkanNS
 		uboLayoutBinding.pImmutableSamplers = nullptr;
 		uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
+		VkDescriptorSetLayoutBinding samplerLayoutBinding = {};
+		samplerLayoutBinding.binding = 1;
+		samplerLayoutBinding.descriptorCount = 1;
+		samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		samplerLayoutBinding.pImmutableSamplers = nullptr;
+		samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
 		VkDescriptorSetLayoutCreateInfo layoutCreateInfo = {};
+		std::array<VkDescriptorSetLayoutBinding,2> bindings = { uboLayoutBinding, samplerLayoutBinding };
 		layoutCreateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-		layoutCreateInfo.bindingCount = 1;
-		layoutCreateInfo.pBindings = &uboLayoutBinding;
+		layoutCreateInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+		layoutCreateInfo.pBindings = bindings.data();
 
 		if (vkCreateDescriptorSetLayout(device, &layoutCreateInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS)
 		{
@@ -1088,7 +1269,7 @@ namespace TKVulkanNS
 		viewportStateCreateInfo.pViewports = &viewPort;
 		viewportStateCreateInfo.scissorCount = 1;
 		viewportStateCreateInfo.viewportCount = 1;
-		//viewportStateCreateInfo.flags = 
+		viewportStateCreateInfo.flags = 0;// VK_DYNAMIC_STATE_VIEWPORT | VK_DYNAMIC_STATE_SCISSOR;
 		
 		VkPipelineRasterizationStateCreateInfo rastaerizationCreateInfo = {};
 		rastaerizationCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
@@ -1110,9 +1291,9 @@ namespace TKVulkanNS
 		//msaa state
 		VkPipelineMultisampleStateCreateInfo multisampleStateCreateInfo = {};
 		multisampleStateCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-		multisampleStateCreateInfo.sampleShadingEnable = VK_FALSE;
-		multisampleStateCreateInfo.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-		multisampleStateCreateInfo.minSampleShading = 1.0f;
+		multisampleStateCreateInfo.sampleShadingEnable = VK_TRUE;//enable sample shading in the pipeline,but loss performance;
+		multisampleStateCreateInfo.rasterizationSamples = msaaSamples;
+		multisampleStateCreateInfo.minSampleShading = .2f;//min fraction for sample shading; closer to 1 is smooth;
 		multisampleStateCreateInfo.pSampleMask = nullptr;
 		multisampleStateCreateInfo.alphaToCoverageEnable = VK_FALSE;
 		multisampleStateCreateInfo.alphaToOneEnable = VK_FALSE;
@@ -1140,14 +1321,15 @@ namespace TKVulkanNS
 		colorBlendStateCreateInfo.blendConstants[3] = 0;//a blend constant factor
 
 		//Dynamic State
-		VkDynamicState dynamicStates[] = {
+		std::vector<VkDynamicState> dynamicStates = {
 			VK_DYNAMIC_STATE_VIEWPORT,
+			VK_DYNAMIC_STATE_SCISSOR,
 			VK_DYNAMIC_STATE_LINE_WIDTH,
 		};
 		VkPipelineDynamicStateCreateInfo dynamicStateCreateInfo = {};
 		dynamicStateCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-		dynamicStateCreateInfo.dynamicStateCount = 2;
-		dynamicStateCreateInfo.pDynamicStates = dynamicStates;
+		dynamicStateCreateInfo.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
+		dynamicStateCreateInfo.pDynamicStates = dynamicStates.data();
 		
 		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = {};
 		pipelineLayoutCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -1161,6 +1343,19 @@ namespace TKVulkanNS
 			throw std::runtime_error("failed to create pipeline layout");
 		}
 
+		///深度测试;
+		VkPipelineDepthStencilStateCreateInfo depthStencilStateCreateInfo = {};
+		depthStencilStateCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+		depthStencilStateCreateInfo.depthTestEnable = VK_TRUE;
+		depthStencilStateCreateInfo.depthWriteEnable = VK_TRUE;
+		depthStencilStateCreateInfo.depthCompareOp = VK_COMPARE_OP_LESS;
+		depthStencilStateCreateInfo.depthBoundsTestEnable = VK_FALSE;
+		depthStencilStateCreateInfo.minDepthBounds = 0.0f;
+		depthStencilStateCreateInfo.maxDepthBounds = 1.0f;
+		depthStencilStateCreateInfo.stencilTestEnable = VK_FALSE;
+		depthStencilStateCreateInfo.front = {};
+		depthStencilStateCreateInfo.back = {};
+
 		VkGraphicsPipelineCreateInfo  graphicsPipelineCreateInfo = {};
 		graphicsPipelineCreateInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
 		graphicsPipelineCreateInfo.stageCount = 2;
@@ -1170,9 +1365,9 @@ namespace TKVulkanNS
 		graphicsPipelineCreateInfo.pRasterizationState = &rastaerizationCreateInfo;
 		graphicsPipelineCreateInfo.pMultisampleState = &multisampleStateCreateInfo;
 		graphicsPipelineCreateInfo.pInputAssemblyState = &inputAssembly;
-		graphicsPipelineCreateInfo.pDepthStencilState = nullptr;
+		graphicsPipelineCreateInfo.pDepthStencilState = &depthStencilStateCreateInfo;
 		graphicsPipelineCreateInfo.pColorBlendState = &colorBlendStateCreateInfo;
-		graphicsPipelineCreateInfo.pDynamicState = nullptr;// &dynamicStateCreateInfo;
+		graphicsPipelineCreateInfo.pDynamicState = &dynamicStateCreateInfo;
 		graphicsPipelineCreateInfo.layout = pipelineLayout;
 		graphicsPipelineCreateInfo.renderPass = renderPass;
 		graphicsPipelineCreateInfo.subpass = 0;
@@ -1204,14 +1399,16 @@ namespace TKVulkanNS
 		swapChainFramebuffers.resize( swapChainImageViews.size() );
 		for (size_t i = 0; i < swapChainImageViews.size(); ++i)
 		{
-			VkImageView attachments[] = {
+			std::array<VkImageView, 3> attachments = {
+				colorImageView,
+				depthImageView,
 				swapChainImageViews[i]
 			};
 			
 			VkFramebufferCreateInfo frambufferCreateIfo = {};
 			frambufferCreateIfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-			frambufferCreateIfo.attachmentCount = 1;
-			frambufferCreateIfo.pAttachments = attachments;
+			frambufferCreateIfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+			frambufferCreateIfo.pAttachments = attachments.data();
 			frambufferCreateIfo.renderPass = renderPass;
 			frambufferCreateIfo.width = swapChainExtent.width;
 			frambufferCreateIfo.height = swapChainExtent.height;
@@ -1236,7 +1433,7 @@ namespace TKVulkanNS
 		/// VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT 允许命令缓冲区单独重置，没有这个标志，所有的缓冲区都必须一起重置; vkResetCommandBuffer主动重置，或者vkBeginCommandBuffer时隐士重置;
 		///	VK_COMMAND_POOL_CREATE_PROTECTED_BIT 
 		/// </summary>
-		commandPoolCreateInfo.flags = 0;
+		commandPoolCreateInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 
 		if (vkCreateCommandPool(device, &commandPoolCreateInfo, nullptr, &commandPool) != VK_SUCCESS)
 		{
@@ -1312,7 +1509,7 @@ namespace TKVulkanNS
 		return format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT || format == VK_FORMAT_D16_UNORM_S8_UINT;
 	}
 
-	void TKVulkanApplication::transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout)
+	void TKVulkanApplication::transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout, uint32_t mipLevels)
 	{
 		VkCommandBuffer commandBuffer = beginSingleTimeCommands();
 
@@ -1336,7 +1533,7 @@ namespace TKVulkanNS
 			barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
 		}
 		barrier.subresourceRange.baseMipLevel = 0;
-		barrier.subresourceRange.levelCount = 1;
+		barrier.subresourceRange.levelCount = mipLevels;
 		barrier.subresourceRange.baseArrayLayer = 0;
 		barrier.subresourceRange.layerCount = 1;
 		VkPipelineStageFlags sourceStage;
@@ -1379,10 +1576,46 @@ namespace TKVulkanNS
 		endSingleTimeCommands(commandBuffer);
 	}
 
+	void TKVulkanApplication::createImage(uint32_t width, uint32_t height, uint32_t mipLevels, VkSampleCountFlagBits numSamples, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage,
+		VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory)
+	{
+		VkImageCreateInfo imageInfo = {};
+		imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+		imageInfo.imageType = VK_IMAGE_TYPE_2D;
+		imageInfo.extent.width = width;
+		imageInfo.extent.height = height;
+		imageInfo.extent.depth = 1;
+		imageInfo.mipLevels = mipLevels;
+		imageInfo.arrayLayers = 1;
+		imageInfo.format = format;
+		imageInfo.tiling = tiling;
+		imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		imageInfo.usage = usage;
+		imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		imageInfo.samples = numSamples;
+		imageInfo.flags = 0;
+		if (vkCreateImage(device, &imageInfo, nullptr, &image) != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to create image");
+		}
+		VkMemoryRequirements memRequirements;
+		vkGetImageMemoryRequirements(device, image, &memRequirements);
+		VkMemoryAllocateInfo allocInfo = {};
+		allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+		allocInfo.allocationSize = memRequirements.size;
+		allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties);
+		if (vkAllocateMemory(device, &allocInfo, nullptr, &imageMemory) != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to allocate image memory");
+		}
+		vkBindImageMemory(device, image, imageMemory, 0);
+	}
+
 	void TKVulkanApplication::createTextureImage()
 	{
 		int texWidth, texHeight, texChannels;
-		stbi_uc* pixels = stbi_load("Shaders/textures/texture.jpg", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+		stbi_uc* pixels = stbi_load(TEXTURE_PATH.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+		mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(texWidth, texHeight)))) + 1;
 		VkDeviceSize imageSize = texWidth * texHeight * 4;
 		if (!pixels)
 		{
@@ -1399,44 +1632,12 @@ namespace TKVulkanNS
 		vkUnmapMemory(device, stagingBufferMemory);
 
 		stbi_image_free(pixels);
-
-		VkImageCreateInfo imageCreateInfo = {};
-		imageCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-		imageCreateInfo.imageType = VK_IMAGE_TYPE_2D;
-		imageCreateInfo.extent.width  = static_cast<uint32_t>(texWidth);
-		imageCreateInfo.extent.height = static_cast<uint32_t>(texHeight);
-		imageCreateInfo.extent.depth = 1;
-		imageCreateInfo.mipLevels = 1;
-		imageCreateInfo.arrayLayers = 1;
-		imageCreateInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-		imageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-		imageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		imageCreateInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-		imageCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-		imageCreateInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-		imageCreateInfo.flags = 0;
-
-		if (vkCreateImage(device, &imageCreateInfo, nullptr, &textureImage) != VK_SUCCESS)
-		{
-			throw std::runtime_error("failed to create image");
-		}
-
-		VkMemoryRequirements memoryRequirements;
-		vkGetImageMemoryRequirements(device, textureImage, &memoryRequirements);
-
-		VkMemoryAllocateInfo allocateInfo = {};
-		allocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-		allocateInfo.allocationSize = memoryRequirements.size;
-		allocateInfo.memoryTypeIndex = findMemoryType(memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-		if (vkAllocateMemory(device, &allocateInfo, nullptr, &textureImageMemory) != VK_SUCCESS)
-		{
-			throw std::runtime_error("failed to allocate image memory");
-		}
-
-		vkBindImageMemory(device, textureImage, textureImageMemory, 0);
+		createImage(texWidth, texHeight, mipLevels, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage, textureImageMemory);
 		
-		transitionImageLayout(textureImage, VK_FORMAT_R8G8B8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+		transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mipLevels);
 		copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
+		generateMipmaps(textureImage, VK_FORMAT_R8G8B8A8_UNORM, texWidth, texHeight, mipLevels);
 
 		vkDestroyBuffer(device, stagingBuffer, nullptr);
 		vkFreeMemory(device, stagingBufferMemory, nullptr);
@@ -1444,20 +1645,85 @@ namespace TKVulkanNS
 
 	void TKVulkanApplication::createTextureImageView()
 	{
-		VkImageViewCreateInfo viewCreateInfo = {};
-		viewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-		viewCreateInfo.image = textureImage;
-		viewCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-		viewCreateInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-		viewCreateInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-		viewCreateInfo.subresourceRange.baseMipLevel = 0;
-		viewCreateInfo.subresourceRange.levelCount = 1;
-		viewCreateInfo.subresourceRange.baseArrayLayer = 0;
-		viewCreateInfo.subresourceRange.layerCount = 1;
-		
-		if (vkCreateImageView(device, &viewCreateInfo, nullptr, &textureImageView) != VK_SUCCESS)
+		textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, 1);
+	}
+
+	void TKVulkanApplication::createTextureSampler()
+	{
+		VkSamplerCreateInfo samplerCreateInfo = {};
+		samplerCreateInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+		samplerCreateInfo.magFilter = VK_FILTER_LINEAR;
+		samplerCreateInfo.minFilter = VK_FILTER_LINEAR;
+		samplerCreateInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+		samplerCreateInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+		samplerCreateInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+
+		///开启各项异性采样;
+		samplerCreateInfo.anisotropyEnable = VK_TRUE;
+		//纹素采样的数量限制;
+		samplerCreateInfo.maxAnisotropy = 16;
+
+		samplerCreateInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+		//uv坐标是否归一化，归一化范围[0,1]。否则[0,texWidth) [0, texHeight);
+		samplerCreateInfo.unnormalizedCoordinates = VK_FALSE;
+		//纹素先和值比较，再进行过滤操作, e.g. shadowmap;
+		samplerCreateInfo.compareEnable = VK_FALSE;
+		samplerCreateInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+		samplerCreateInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+		samplerCreateInfo.mipLodBias = 0.0f;
+		samplerCreateInfo.minLod = 0.0f;
+		samplerCreateInfo.maxLod = static_cast<float>(mipLevels);
+
+		if (vkCreateSampler(device, &samplerCreateInfo, nullptr, &textureSampler) != VK_SUCCESS)
 		{
-			throw std::runtime_error("failed to create image view");
+			throw std::runtime_error("failed to create texture sampler");
+		}
+	}
+
+	void TKVulkanApplication::createDepthResources()
+	{
+		VkFormat depthFormat = findDepthFormat();
+		createImage(swapChainExtent.width, swapChainExtent.height, 1, msaaSamples, depthFormat, VK_IMAGE_TILING_OPTIMAL, 
+			VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, depthImage, depthImageMemory);
+		depthImageView = createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, 1);
+		transitionImageLayout(depthImage, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 1);
+	}
+
+	void TKVulkanApplication::loadModel()
+	{
+		tinyobj::attrib_t attrib;
+		std::vector<tinyobj::shape_t> shapes;
+		std::vector<tinyobj::material_t> materials;
+		std::string warn, err;
+		std::unordered_map<Vertex, uint32_t> uniqueVertices = {};
+		if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, MODEL_PATH.c_str()))
+		{
+			throw std::runtime_error(warn + err);
+		}
+	
+		for (const auto& shape : shapes)
+		{
+			for (const auto& index : shape.mesh.indices)
+			{
+				Vertex vertex = {};
+				vertex.pos = {
+					attrib.vertices[3 * index.vertex_index + 0],
+					attrib.vertices[3 * index.vertex_index + 1],
+					attrib.vertices[3 * index.vertex_index + 2]
+				};
+				vertex.texCoord = {
+					attrib.texcoords[2 * index.texcoord_index + 0],
+					1.0f - attrib.texcoords[2 * index.texcoord_index + 1]
+				};
+
+				vertex.color = { 1.0f, 1.0f, 1.0f };
+				if (uniqueVertices.count(vertex) == 0)
+				{
+					uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());
+					vertices.push_back(vertex);
+				}
+				indices.push_back(uniqueVertices[vertex]);
+			}
 		}
 	}
 
@@ -1512,7 +1778,7 @@ namespace TKVulkanNS
 
 		VkCommandBufferAllocateInfo commandBufferAllocateInfo = {};
 		commandBufferAllocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-		commandBufferAllocateInfo.commandBufferCount = (uint32_t)commandBuffers.size();
+		commandBufferAllocateInfo.commandBufferCount = static_cast<uint32_t>(commandBuffers.size());
 		commandBufferAllocateInfo.commandPool = commandPool;
 		/// <summary>
 		/// VK_COMMAND_BUFFER_LEVEL_PRIMARY 可以提交到队列执行，但不能从其他的命令缓冲区调用;
@@ -1524,68 +1790,67 @@ namespace TKVulkanNS
 		{
 			throw std::runtime_error("failed to create command buffers");
 		}
+	}
 
-		for (size_t i = 0; i < commandBuffers.size(); ++i)
+	void TKVulkanApplication::recordCommandBuffers(VkCommandBuffer commandBuffer, uint32_t imageIndex)
+	{
+		VkCommandBufferBeginInfo beginInfo = {};
+		beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+		/// <summary>
+		/// VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT commandBuffer执行一次后立即清理；
+		/// VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT 辅助型commandBuffer，限制在一个renderpass中生效;
+		/// VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT commandBuffer可以重复提交，同时也在等待执行;
+		/// </summary>
+		beginInfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
+		beginInfo.pInheritanceInfo = nullptr;
+
+		if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS)
 		{
-			VkCommandBufferBeginInfo beginInfo = {};
-			beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-			/// <summary>
-			/// VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT commandBuffer执行一次后立即清理；
-			/// VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT 辅助型commandBuffer，限制在一个renderpass中生效;
-			/// VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT commandBuffer可以重复提交，同时也在等待执行;
-			/// </summary>
-			beginInfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
-			beginInfo.pInheritanceInfo = nullptr;
-
-			vkBeginCommandBuffer(commandBuffers[i], &beginInfo);
+			throw std::runtime_error("failed to begin recording command buffer");
 		}
 
-		for (size_t i =0; i<commandBuffers.size(); ++i)
-		{
-			VkRenderPassBeginInfo renderPassBeginInfo = {};
-			renderPassBeginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-			renderPassBeginInfo.renderPass = renderPass;
-			renderPassBeginInfo.framebuffer = swapChainFramebuffers[i];
-			renderPassBeginInfo.renderArea.extent = swapChainExtent;
-			renderPassBeginInfo.renderArea.offset = { 0, 0 };
-			renderPassBeginInfo.clearValueCount = 1;
-			VkClearValue clearColor = {0, 0, 0, 0};
-			renderPassBeginInfo.pClearValues = &clearColor;
+		VkRenderPassBeginInfo renderPassBeginInfo = {};
+		renderPassBeginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+		renderPassBeginInfo.renderPass = renderPass;
+		renderPassBeginInfo.framebuffer = swapChainFramebuffers[imageIndex];
+		renderPassBeginInfo.renderArea.extent = swapChainExtent;
+		renderPassBeginInfo.renderArea.offset = { 0, 0 };
+		std::array<VkClearValue, 2> clearValues = {};
+		clearValues[0].color = { 0, 0, 0, 1 };
+		clearValues[1].depthStencil = { 1.0f, 0 };
+		renderPassBeginInfo.pClearValues = clearValues.data();
+		renderPassBeginInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
 
-			/// <summary>
-			/// VK_SUBPASS_CONTENTS_INLINE 渲染过程命令被嵌入在主命令缓冲区中，没有辅助缓冲区执行;
-			/// VK_SUBPASS_CONTENTS_SECONDARY_COOMAND_BUFFERS 渲染通道命令将会从辅助命令缓冲区执行;
-			/// </summary>
-			vkCmdBeginRenderPass(commandBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
-			vkCmdBindPipeline(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+		/// <summary>
+		/// VK_SUBPASS_CONTENTS_INLINE 渲染过程命令被嵌入在主命令缓冲区中，没有辅助缓冲区执行;
+		/// VK_SUBPASS_CONTENTS_SECONDARY_COOMAND_BUFFERS 渲染通道命令将会从辅助命令缓冲区执行;
+		/// </summary>
+		vkCmdBeginRenderPass(commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+		{
+			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+
+			VkViewport viewport = {};
+			viewport.x = 0.0f;
+			viewport.y = 0.0f;
+			viewport.width = (float)swapChainExtent.width;
+			viewport.height = (float)swapChainExtent.height;
+			vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+			
+			VkRect2D scissor = {};
+			scissor.offset = { 0, 0 };
+			scissor.extent = swapChainExtent;
+			vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
 			VkBuffer vertexBuffers[] = { vertexBuffer };
 			VkDeviceSize offsets[] = { 0 };
-			vkCmdBindVertexBuffers(commandBuffers[i], 0, 1, vertexBuffers, offsets);
-			vkCmdBindIndexBuffer(commandBuffers[i], indexBuffer, 0, VK_INDEX_TYPE_UINT16);
-			vkCmdBindDescriptorSets(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
-			vkCmdDrawIndexed(commandBuffers[i], static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
-			//vkCmdDraw(commandBuffers[i], static_cast<uint32_t>(vertices.size()), 1, 0, 0);
-			vkCmdEndRenderPass(commandBuffers[i]);
-			if (vkEndCommandBuffer(commandBuffers[i]) != VK_SUCCESS) {
-				throw std::runtime_error("failed to record command buffer!");
-			}
+			vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+			vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+			vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[imageIndex], 0, nullptr);
+			vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
 		}
-	}
-
-	/// <summary>
-	/// 创建信号量;
-	/// </summary>
-	void TKVulkanApplication::createSemaphores()
-	{
-		VkSemaphoreCreateInfo semaphoreCreateInfo = {};
-		semaphoreCreateInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-
-		auto success = vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &imageAvailableSemaphore) == VK_SUCCESS;
-		success = success && vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &renderFinishedSemaphore) == VK_SUCCESS;
-		if (!success)
-		{
-			throw std::runtime_error("failed to create semaphore");
+		vkCmdEndRenderPass(commandBuffer);
+		if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
+			throw std::runtime_error("failed to record command buffer!");
 		}
 	}
 
@@ -1596,13 +1861,12 @@ namespace TKVulkanNS
 	/// </summary>
 	void TKVulkanApplication::drawFrame()
 	{
-		vkQueueWaitIdle(presentQueue);
-		createSemaphores();
+		vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
 		/// <summary>
 		/// 从交换链换取图像;
 		/// </summary>
 		uint32_t imageIndex;
-		VkResult result = vkAcquireNextImageKHR(device, swapChain, (std::numeric_limits<uint64_t>::max)(), imageAvailableSemaphore,
+		VkResult result = vkAcquireNextImageKHR(device, swapChain, (std::numeric_limits<uint64_t>::max)(), imageAvailableSemaphore[currentFrame],
 			VK_NULL_HANDLE, &imageIndex);
 		//交换链与surface 不再兼容，不可进行渲染.
 		if (result == VK_ERROR_OUT_OF_DATE_KHR)
@@ -1615,14 +1879,18 @@ namespace TKVulkanNS
 		{
 			throw std::runtime_error("failed to acquire swap chain image");
 		}
+		updateUniformBuffer();
+		vkResetFences(device, 1, &inFlightFences[currentFrame]);
 
+		vkResetCommandBuffer(commandBuffers[currentFrame], VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT);
+		recordCommandBuffers(commandBuffers[currentFrame], imageIndex);
 		/// <summary>
 		/// 提交命令缓冲区;
 		/// </summary>
 		VkSubmitInfo submitInfo = {};
 		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 		
-		VkSemaphore waitSemaphores[] = {imageAvailableSemaphore};
+		VkSemaphore waitSemaphores[] = {imageAvailableSemaphore[currentFrame]};
 		VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT  };
 		submitInfo.waitSemaphoreCount = 1;
 		submitInfo.pWaitSemaphores = waitSemaphores;
@@ -1631,7 +1899,7 @@ namespace TKVulkanNS
 		submitInfo.commandBufferCount = 1;
 		submitInfo.pCommandBuffers = &commandBuffers[imageIndex];
 
-		VkSemaphore signalSemaphores[] = {renderFinishedSemaphore};
+		VkSemaphore signalSemaphores[] = {renderFinishedSemaphore[currentFrame]};
 		submitInfo.signalSemaphoreCount = 1;
 		submitInfo.pSignalSemaphores = signalSemaphores;
 
@@ -1646,8 +1914,8 @@ namespace TKVulkanNS
 		presentInfo.waitSemaphoreCount = 1;
 		presentInfo.pWaitSemaphores = signalSemaphores;
 		VkSwapchainKHR swapChains[] = { swapChain };
-		presentInfo.swapchainCount = 1;
 		presentInfo.pSwapchains = swapChains;
+		presentInfo.swapchainCount = 1;
 		presentInfo.pImageIndices = &imageIndex;
 		presentInfo.pResults = nullptr;
 
@@ -1661,7 +1929,7 @@ namespace TKVulkanNS
 		{
 			throw std::runtime_error("failed to present swap chain image");
 		}
-		vkQueueWaitIdle(presentQueue);
+		currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_SWAP_CHAIN;
 	}
 
 	void TKVulkanApplication::updateUniformBuffer()
@@ -1690,26 +1958,38 @@ namespace TKVulkanNS
 		createImageViews();
 		createRenderPass();
 		createGraphicsPipeline();
+		createColorResources();
+		createDepthResources();
 		createFrameBuffers();
 		createCommandBuffers();
 	}
 
 	void TKVulkanApplication::cleanupSwapChain()
 	{
+		vkDestroyImageView(device, colorImageView, nullptr);
+		vkDestroyImage(device, colorImage, nullptr);
+		vkFreeMemory(device, colorImageMemory, nullptr);
+
+		vkDestroyImageView(device, depthImageView, nullptr);
+		vkDestroyImage(device, depthImage, nullptr);
+		vkFreeMemory(device, depthImageMemory, nullptr);
+
 		for (size_t i = 0; i < swapChainFramebuffers.size(); i++)
 		{
 			vkDestroyFramebuffer(device, swapChainFramebuffers[i], nullptr);
 		}
 
-		vkFreeCommandBuffers(device, commandPool, static_cast<uint32_t>(commandBuffers.size()), commandBuffers.data());
-
-		vkDestroyPipeline(device, graphicsPipeline, nullptr);
-		vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
-		vkDestroyRenderPass(device, renderPass, nullptr);
-		for (size_t i = 0; i<swapChainImageViews.size(); ++i)
+		for (size_t i = 0; i < swapChainImageViews.size(); ++i)
 		{
 			vkDestroyImageView(device, swapChainImageViews[i], nullptr);
 		}
+
+		/*vkFreeCommandBuffers(device, commandPool, static_cast<uint32_t>(commandBuffers.size()), commandBuffers.data());
+
+		vkDestroyPipeline(device, graphicsPipeline, nullptr);
+		vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+		vkDestroyRenderPass(device, renderPass, nullptr);*/
+
 		vkDestroySwapchainKHR(device, swapChain, nullptr);
 	}
 
@@ -1742,6 +2022,32 @@ namespace TKVulkanNS
 		vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
 	}
 
+	VkFormat TKVulkanApplication::findDepthFormat()
+	{
+		return findSupportedFormat(
+			{VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT},
+			VK_IMAGE_TILING_OPTIMAL,
+			VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT
+		);
+	}
+
+	VkFormat TKVulkanApplication::findSupportedFormat(const std::vector<VkFormat>& cadidates, VkImageTiling tiling, VkFormatFeatureFlags features)
+	{
+		for (VkFormat format : cadidates)
+		{
+			VkFormatProperties props;
+			vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &props);
+			if (tiling == VK_IMAGE_TILING_LINEAR && (props.linearTilingFeatures & features) == features)//使用线性平铺格式
+			{
+				return format;
+			}
+			else if (tiling == VK_IMAGE_TILING_OPTIMAL && (props.optimalTilingFeatures & features) == features)//使用最佳平铺格式
+			{
+				return format;
+			}
+		}
+		throw std::runtime_error("failed to find supported format!");
+	}
 
 	/// <summary>
 	/// 
@@ -1765,12 +2071,103 @@ namespace TKVulkanNS
 		throw std::runtime_error("failed to find suitable memory type!");
 	}
 
+	void TKVulkanApplication::generateMipmaps(VkImage image, VkFormat format, int32_t texWidth, int32_t texHeight, uint32_t mipLevels)
+	{
+		VkFormatProperties formatProperties;
+		vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &formatProperties);
+		if (!(formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT))
+		{
+			throw std::runtime_error("texture image format does not support linear blitting!");
+		}
+
+		VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+
+		VkImageMemoryBarrier barrier = {};
+		barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+		barrier.image = image;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		barrier.subresourceRange.baseArrayLayer = 0;
+		barrier.subresourceRange.layerCount = 1;
+		barrier.subresourceRange.levelCount = 1;
+
+		int32_t	mipWidth = texHeight;
+		int32_t mipHeight = texHeight;
+
+		for (uint32_t i = 1; i < mipLevels; ++i)
+		{
+			barrier.subresourceRange.baseMipLevel = i - 1;
+			barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+			barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+			barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+			barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+			vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+				0, nullptr, 
+				0, nullptr, 1, &barrier);
+
+			VkImageBlit blit = {};
+			blit.srcOffsets[0] = { 0, 0, 0 };
+			blit.srcOffsets[1] = { mipWidth, mipHeight, 1 };
+			blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+			blit.srcSubresource.mipLevel = i - 1;
+			blit.srcSubresource.baseArrayLayer = 0;
+			blit.srcSubresource.layerCount = 1;
+			blit.dstOffsets[0] = { 0, 0, 0 };
+			blit.dstOffsets[1] = { mipWidth > 1 ? mipWidth>>1 : 1, mipHeight > 1 ? mipHeight>>1 : 1, 1 };
+			blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+			blit.dstSubresource.mipLevel = i;
+			blit.dstSubresource.baseArrayLayer = 0;
+			blit.dstSubresource.layerCount = 1;
+			vkCmdBlitImage(commandBuffer,
+				image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+				image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 
+				1, &blit, VK_FILTER_LINEAR);
+
+			barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+			barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+			barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+			vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+								0, nullptr,
+								0, nullptr, 1, &barrier);
+			if (mipHeight > 1) mipHeight >>= 1;
+			if (mipWidth > 1) mipWidth >>= 1;
+		}
+		barrier.subresourceRange.baseMipLevel = mipLevels - 1;
+		barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+		barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+		barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+		vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+						0, nullptr,
+						0, nullptr, 1, &barrier);
+
+		endSingleTimeCommands(commandBuffer);
+	}
+
+	VkSampleCountFlagBits TKVulkanApplication::getMaxUsableSampleCount()
+	{
+		VkPhysicalDeviceProperties physicalDeviceProperties;
+		vkGetPhysicalDeviceProperties(physicalDevice, &physicalDeviceProperties);
+		VkSampleCountFlags counts = std::min(physicalDeviceProperties.limits.framebufferColorSampleCounts, physicalDeviceProperties.limits.framebufferDepthSampleCounts);
+		if(counts & VK_SAMPLE_COUNT_64_BIT) { return VK_SAMPLE_COUNT_64_BIT; }
+		if(counts & VK_SAMPLE_COUNT_32_BIT) { return VK_SAMPLE_COUNT_32_BIT; }
+		if(counts & VK_SAMPLE_COUNT_16_BIT) { return VK_SAMPLE_COUNT_16_BIT; }
+		if(counts & VK_SAMPLE_COUNT_8_BIT) { return VK_SAMPLE_COUNT_8_BIT; }
+		if(counts & VK_SAMPLE_COUNT_4_BIT) { return VK_SAMPLE_COUNT_4_BIT; }
+		if(counts & VK_SAMPLE_COUNT_2_BIT) { return VK_SAMPLE_COUNT_2_BIT; }
+		return VK_SAMPLE_COUNT_1_BIT;
+	}
+
 	void TKVulkanApplication::mainLoop()
 	{
 		while (!glfwWindowShouldClose(window))
 		{
 			glfwPollEvents();
-			updateUniformBuffer();
 			drawFrame();
 		}
 
@@ -1783,12 +2180,15 @@ namespace TKVulkanNS
 	void TKVulkanApplication::cleanup()
 	{
 		cleanupSwapChain();
+
 		vkDestroyDescriptorPool(device, descriptorPool, nullptr);
 		vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
 		//vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
 
 		vkDestroyBuffer(device, vertexBuffer, nullptr);
 		vkDestroyImage(device, textureImage, nullptr);
+		vkDestroySampler(device, textureSampler, nullptr);
+		vkDestroyImageView(device, textureImageView, nullptr);
 		vkFreeMemory(device, vertexBufferMemory, nullptr);
 		vkDestroyBuffer(device, indexBuffer, nullptr);
 		vkFreeMemory(device, indexBufferMemory, nullptr);
@@ -1798,9 +2198,13 @@ namespace TKVulkanNS
 		if (enableValidationLayers)
 			DestroyDebugReportCallbackEXT(vkInstance, callback, nullptr);
 
-		vkDestroySemaphore(device, imageAvailableSemaphore, nullptr);
-		vkDestroySemaphore(device, renderFinishedSemaphore, nullptr);
-
+		for (int i = 0; i < MAX_FRAMES_IN_SWAP_CHAIN; ++i)
+		{
+			vkDestroySemaphore(device, imageAvailableSemaphore[i], nullptr);
+			vkDestroySemaphore(device, renderFinishedSemaphore[i], nullptr);
+			vkDestroyFence(device, inFlightFences[i], nullptr);
+		}
+		
 		vkDestroyCommandPool(device, commandPool, nullptr);
 		vkDestroyPipeline(device, graphicsPipeline, nullptr);
 		//vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
@@ -1827,7 +2231,7 @@ namespace TKVulkanNS
 
 int main()
 {
-	TKVulkanNS::TKVulkanApplication app;
+	std::TKVulkanApplication app;
 	try
 	{
 		app.run();
