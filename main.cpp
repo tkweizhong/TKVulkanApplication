@@ -1903,7 +1903,7 @@ namespace std
 		submitInfo.signalSemaphoreCount = 1;
 		submitInfo.pSignalSemaphores = signalSemaphores;
 
-		if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE) != VK_SUCCESS)
+		if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]) != VK_SUCCESS)
 		{
 			throw std::runtime_error("failed to submit draw command buffer");
 		}
@@ -1952,16 +1952,23 @@ namespace std
 
 	void TKVulkanApplication::recreateSwapChain()
 	{
+		int width = 0, height = 0;
+		glfwGetFramebufferSize(window, &width, &height);
+		while (width == 0 || height == 0)
+		{
+			glfwGetFramebufferSize(window, &width, &height);
+			glfwWaitEvents();
+		}
+
 		vkDeviceWaitIdle(device);
+
+		cleanupSwapChain();
 
 		createSwapChain();
 		createImageViews();
-		createRenderPass();
-		createGraphicsPipeline();
 		createColorResources();
 		createDepthResources();
 		createFrameBuffers();
-		createCommandBuffers();
 	}
 
 	void TKVulkanApplication::cleanupSwapChain()
