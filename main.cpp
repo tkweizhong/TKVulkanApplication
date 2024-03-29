@@ -1373,6 +1373,9 @@ namespace std
 		{
 			throw std::runtime_error("failed to create graphics pipelines");
 		}
+
+		vkDestroyShaderModule(device, vertShaderModule, nullptr);
+		vkDestroyShaderModule(device, fragShaderModule, nullptr);
 	}
 
 	VkShaderModule TKVulkanApplication::createShaderModule(const std::vector<char>& code)
