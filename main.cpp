@@ -48,12 +48,12 @@ namespace std
 	/// </summary>
 	struct QueueFamilyIndices
 	{
-		int graphicsFamily = -1;
-		int presentFamily = -1;
+		std::optional<uint32_t> graphicsFamily;
+		std::optional<uint32_t> presentFamily;
 
 		bool isComplete()
 		{
-			return graphicsFamily >= 0 && presentFamily >= 0;
+			return graphicsFamily.has_value() && presentFamily.has_value();
 		}
 	};
 
@@ -704,7 +704,7 @@ namespace std
 
 		QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
 		std::vector<VkDeviceQueueCreateInfo> deviceQueueCreateInfos;
-		std::set<int> uniqueQueueFamilies = {indices.graphicsFamily, indices.presentFamily};
+		std::set<uint32_t> uniqueQueueFamilies = {indices.graphicsFamily.value(), indices.presentFamily.value()};
 		for (const int queueFamily : uniqueQueueFamilies)
 		{
 			VkDeviceQueueCreateInfo queueCreateInfo = {};
@@ -742,8 +742,8 @@ namespace std
 			throw std::runtime_error("failed to create logical device!");
 		}
 
-		vkGetDeviceQueue(device, indices.graphicsFamily, 0, &graphicsQueue);
-		vkGetDeviceQueue(device, indices.presentFamily, 0, &presentQueue);
+		vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
+		vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
 	}
 
 	QueueFamilyIndices  TKVulkanApplication::findQueueFamilies(const VkPhysicalDevice& physicalDevice)
@@ -765,7 +765,9 @@ namespace std
 			//检查设备是否支持呈现到surface;
 			VkBool32 presentSupport = false;
 			vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice, i, surface, &presentSupport);
-			if (queueFamily.queueCount > 0 && presentSupport == VK_SUCCESS)
+			///手残把presentSupport == VK_SUCCESS, 但是这个值是bool类型的, 所以这里应该是presentSupport == VK_TRUE
+			//VK_SUCCESS == 0, VK_TRUE == 1
+			if (queueFamily.queueCount > 0 && presentSupport)
 			{
 				indices.presentFamily = i;
 			}
@@ -932,7 +934,7 @@ namespace std
 		swapChainCreateInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
 		QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
-		uint32_t queueFamilyIndices[] = {static_cast<uint32_t>(indices.graphicsFamily), static_cast<uint32_t>(indices.presentFamily)};
+		uint32_t queueFamilyIndices[] = {static_cast<uint32_t>(indices.graphicsFamily.value()), static_cast<uint32_t>(indices.presentFamily.value())};
 		if (indices.graphicsFamily != indices.presentFamily)
 		{
 			swapChainCreateInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
@@ -1425,7 +1427,7 @@ namespace std
 
 		VkCommandPoolCreateInfo commandPoolCreateInfo = {};
 		commandPoolCreateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-		commandPoolCreateInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily;
+		commandPoolCreateInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value();
 		/// <summary>
 		/// VK_COMMAND_POOL_CREATE_TRANSIENT_BIT 提示命令缓冲区非常频繁的重新记录新命令,一般在帧结束时重置或者释放;
 		/// VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT 允许命令缓冲区单独重置，没有这个标志，所有的缓冲区都必须一起重置; vkResetCommandBuffer主动重置，或者vkBeginCommandBuffer时隐士重置;
