@@ -39,8 +39,6 @@ namespace std
 
 namespace std
 {
-
-
 	/// <summary>
 	/// 并不是每一个物理设备都支持窗体显示功能，我们需要检查物理设备是否可以图像呈现到我们创建的surface上;
 	/// 支持graphics命令的队列簇 和  支持presentation命令的队列簇可能不是一个队列簇，因此这里需要分开两个字段来查询;
@@ -108,9 +106,9 @@ namespace std
 
 	struct UniformBufferObject
 	{
-		glm::mat4 model;
-		glm::mat4 view;
-		glm::mat4 proj;
+		alignas(16) glm::mat4 model;
+		alignas(16) glm::mat4 view;
+		alignas(16) glm::mat4 proj;
 	};
 	
 	struct SwapChainSupportDetails
@@ -210,11 +208,11 @@ namespace std
 	{
 		if (availableFormats.size() == 1 && availableFormats[0].format == VK_FORMAT_UNDEFINED)
 		{
-			return { VK_FORMAT_B8G8R8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR };
+			return { VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR };
 		} 
 		for (const auto& availableFormat : availableFormats)
 		{
-			if (availableFormat.format == VK_FORMAT_B8G8R8_UNORM && availableFormat.colorSpace == VK_COLORSPACE_SRGB_NONLINEAR_KHR)
+			if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB && availableFormat.colorSpace == VK_COLORSPACE_SRGB_NONLINEAR_KHR)
 			{
 				return availableFormat;
 			}
@@ -1262,8 +1260,8 @@ namespace std
 
 		VkPipelineViewportStateCreateInfo viewportStateCreateInfo = {};
 		viewportStateCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-		viewportStateCreateInfo.pScissors = &scissor;
-		viewportStateCreateInfo.pViewports = &viewPort;
+		//viewportStateCreateInfo.pScissors = &scissor;
+		//viewportStateCreateInfo.pViewports = &viewPort;
 		viewportStateCreateInfo.scissorCount = 1;
 		viewportStateCreateInfo.viewportCount = 1;
 		viewportStateCreateInfo.flags = 0;// VK_DYNAMIC_STATE_VIEWPORT | VK_DYNAMIC_STATE_SCISSOR;
@@ -1279,7 +1277,7 @@ namespace std
 		//最大线宽取决于硬件，任何大于1.0的线宽都需要开启GPU wideLines特性支持;
 		rastaerizationCreateInfo.lineWidth = 1;
 		rastaerizationCreateInfo.cullMode = VK_CULL_MODE_BACK_BIT;
-		rastaerizationCreateInfo.frontFace = VK_FRONT_FACE_CLOCKWISE;
+		rastaerizationCreateInfo.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
 		rastaerizationCreateInfo.depthBiasEnable = VK_FALSE;
 		rastaerizationCreateInfo.depthBiasConstantFactor = 0.f;
 		rastaerizationCreateInfo.depthBiasClamp = 0.f;
@@ -1345,7 +1343,7 @@ namespace std
 		depthStencilStateCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
 		depthStencilStateCreateInfo.depthTestEnable = VK_TRUE;
 		depthStencilStateCreateInfo.depthWriteEnable = VK_TRUE;
-		depthStencilStateCreateInfo.depthCompareOp = VK_COMPARE_OP_LESS;
+		depthStencilStateCreateInfo.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
 		depthStencilStateCreateInfo.depthBoundsTestEnable = VK_FALSE;
 		depthStencilStateCreateInfo.minDepthBounds = 0.0f;
 		depthStencilStateCreateInfo.maxDepthBounds = 1.0f;
@@ -1506,7 +1504,7 @@ namespace std
 
 	bool TKVulkanApplication::hasStencilComponent(VkFormat format)
 	{
-		return format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT || format == VK_FORMAT_D16_UNORM_S8_UINT;
+		return format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT;// || format == VK_FORMAT_D16_UNORM_S8_UINT;
 	}
 
 	void TKVulkanApplication::transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout, uint32_t mipLevels)
@@ -1832,6 +1830,8 @@ namespace std
 			VkViewport viewport = {};
 			viewport.x = 0.0f;
 			viewport.y = 0.0f;
+			viewport.minDepth = 0.0f;
+			viewport.maxDepth = 1.0f;
 			viewport.width = (float)swapChainExtent.width;
 			viewport.height = (float)swapChainExtent.height;
 			vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
@@ -1981,14 +1981,14 @@ namespace std
 		vkDestroyImage(device, depthImage, nullptr);
 		vkFreeMemory(device, depthImageMemory, nullptr);
 
-		for (size_t i = 0; i < swapChainFramebuffers.size(); i++)
+		for (auto & swapChainFramebuffer : swapChainFramebuffers)
 		{
-			vkDestroyFramebuffer(device, swapChainFramebuffers[i], nullptr);
+			vkDestroyFramebuffer(device, swapChainFramebuffer, nullptr);
 		}
 
-		for (size_t i = 0; i < swapChainImageViews.size(); ++i)
+		for (auto & swapChainImageView : swapChainImageViews)
 		{
-			vkDestroyImageView(device, swapChainImageViews[i], nullptr);
+			vkDestroyImageView(device, swapChainImageView, nullptr);
 		}
 
 		/*vkFreeCommandBuffers(device, commandPool, static_cast<uint32_t>(commandBuffers.size()), commandBuffers.data());
@@ -2187,24 +2187,30 @@ namespace std
 	void TKVulkanApplication::cleanup()
 	{
 		cleanupSwapChain();
+		
+		vkDestroyPipeline(device, graphicsPipeline, nullptr);
+		vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+		vkDestroyRenderPass(device, renderPass, nullptr);
 
-		vkDestroyDescriptorPool(device, descriptorPool, nullptr);
-		vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
-		//vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
-
-		vkDestroyBuffer(device, vertexBuffer, nullptr);
-		vkDestroyImage(device, textureImage, nullptr);
-		vkDestroySampler(device, textureSampler, nullptr);
-		vkDestroyImageView(device, textureImageView, nullptr);
-		vkFreeMemory(device, vertexBufferMemory, nullptr);
-		vkDestroyBuffer(device, indexBuffer, nullptr);
-		vkFreeMemory(device, indexBufferMemory, nullptr);
 		vkDestroyBuffer(device, uniformBuffer, nullptr);
 		vkFreeMemory(device, uniformBufferMemory, nullptr);
 
-		if (enableValidationLayers)
-			DestroyDebugReportCallbackEXT(vkInstance, callback, nullptr);
+		vkDestroyDescriptorPool(device, descriptorPool, nullptr);
+		
+		vkDestroySampler(device, textureSampler, nullptr);
+		vkDestroyImageView(device, textureImageView, nullptr);
 
+		vkDestroyImage(device, textureImage, nullptr);
+		vkFreeMemory(device, textureImageMemory, nullptr);		
+		
+		vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
+		
+		vkDestroyBuffer(device, indexBuffer, nullptr);
+		vkFreeMemory(device, indexBufferMemory, nullptr);
+		
+		vkDestroyBuffer(device, vertexBuffer, nullptr);
+		vkFreeMemory(device, vertexBufferMemory, nullptr);
+		
 		for (int i = 0; i < MAX_FRAMES_IN_SWAP_CHAIN; ++i)
 		{
 			vkDestroySemaphore(device, imageAvailableSemaphore[i], nullptr);
@@ -2213,20 +2219,10 @@ namespace std
 		}
 		
 		vkDestroyCommandPool(device, commandPool, nullptr);
-		vkDestroyPipeline(device, graphicsPipeline, nullptr);
-		//vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
-		vkDestroyRenderPass(device, renderPass, nullptr);
-		for (size_t i = 0; i < swapChainImageViews.size(); ++i)
-		{
-			vkDestroyFramebuffer(device, swapChainFramebuffers[i], nullptr);
-		}
-		vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
-		for (size_t i = 0; i < swapChainImageViews.size(); ++i)
-		{
-			vkDestroyImageView(device, swapChainImageViews[i], nullptr);
-		}
-		vkDestroySwapchainKHR(device, swapChain, nullptr);
 		vkDestroyDevice(device, nullptr);
+		if (enableValidationLayers)
+			DestroyDebugReportCallbackEXT(vkInstance, callback, nullptr);
+
 		vkDestroySurfaceKHR(vkInstance, surface, nullptr);
 		vkDestroyInstance(vkInstance, nullptr);
 		vkInstance = nullptr;
