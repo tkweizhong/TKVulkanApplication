@@ -1247,17 +1247,6 @@ namespace std
 		/// <summary>
 		/// ViewPort State;
 		/// </summary>
-		VkViewport viewPort = {};
-		viewPort.x = 0; viewPort.y = 0;
-		viewPort.width = (float)swapChainExtent.width;
-		viewPort.height = (float)swapChainExtent.height;
-		viewPort.minDepth = 0;
-		viewPort.maxDepth = 1.f;
-
-		VkRect2D scissor = {};
-		scissor.extent = swapChainExtent;
-		scissor.offset = { 0, 0 };
-
 		VkPipelineViewportStateCreateInfo viewportStateCreateInfo = {};
 		viewportStateCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
 		//viewportStateCreateInfo.pScissors = &scissor;
